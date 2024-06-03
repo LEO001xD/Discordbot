@@ -19,3 +19,5 @@
 > [1.Get Spotify Cient Id and Spotify Client Secret](https://developer.spotify.com/) .
 > 
 > [2.Create app](https://developer.spotify.com/dashboard/create)
+>
+> role_name = "คาวาอี้เกิวว🥸"
