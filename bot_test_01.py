@@ -164,7 +164,7 @@ async def on_member_join(member):
         txt = f'Welcome {member.mention}. Say hi!'
         await channel.send(txt)
 
-    role_name = "คาวาอี้เกิวว🥸"
+    role_name = "ROLE_NAME"
     role = discord.utils.get(member.guild.roles, name=role_name)
     if role:
         await member.add_roles(role)
