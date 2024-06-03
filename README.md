@@ -20,4 +20,4 @@
 > 
 > [2.Create app](https://developer.spotify.com/dashboard/create)
 >
-> role_name = "คาวาอี้เกิวว🥸"
+> role_name = "ROLE_NAME" <- The role you created in the discord server and want people who enter to receive that role.
