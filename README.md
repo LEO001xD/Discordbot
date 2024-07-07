@@ -1,5 +1,28 @@
-# @python version 3.11
-## install
+# BOT FUNCTIONS
+  ***!help***        Shows this message
+  
+  ***!invite***     Invite bot to your server
+  
+  ***!join***       Tells the bot to join the voice channel
+  
+  ***!leave***      To make bot leave the voice channel
+  
+  ***!pause***      This command pauses the song
+  
+  ***!play***       To play song
+  
+  ***!queue***      Displays the current queue
+  
+  ***!queueclear*** Clears the current queue
+  
+  ***!resume***     Resumes the song
+  
+  ***!skip***       Skips the current song
+  
+  ***!stop***       Stops the song
+  
+## @python version 3.11
+### install
 - pip install discordpy
 - pip install spotipy
 - pip install yt-dlp
