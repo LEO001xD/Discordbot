@@ -1,19 +1,13 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import yt_dlp as youtube_dl
-from spotipy.oauth2 import SpotifyClientCredentials
-import spotipy
 import asyncio
 
-dx100 = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+dx100 = commands.Bot(intents=discord.Intents.all(), command_prefix="!")
 Token = "YOUR_DISCORD_BOT_TOKEN"
-SPOTIPY_CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID'
-SPOTIPY_CLIENT_SECRET = 'YOUR_SPOTIFY_CLIENT_SECRET'
 
-# สร้าง Spotify API Client
-sp = spotipy.Spotify(client_credentials_manager=SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET))
-
-# ปิดเสียงการรายงานข้อผิดพลาดบนคอนโซล
+# Disable error reporting on console
 youtube_dl.utils.bug_reports_message = lambda: ''
 
 ytdl_format_options = {
@@ -27,7 +21,7 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'  # ใช้ IPv4 เนื่องจากบางครั้ง IPv6 ทำให้เกิดปัญหา
+    'source_address': '0.0.0.0'  
 }
 
 ffmpeg_options = {
@@ -53,135 +47,191 @@ class YTDLSource(discord.PCMVolumeTransformer):
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
-# Queue management
-queue = []
-
-def check_queue(ctx):
-    if queue:
-        next_song = queue[0]  # เพลงถัดไปในคิว
-        player = YTDLSource(discord.FFmpegPCMAudio(next_song.url, **ffmpeg_options), data=next_song.data)
-        ctx.voice_client.play(player, after=lambda e: (check_queue(ctx) if not e else None))
-        queue.pop(0)  # ลบเพลงที่ถูกเล่นออกจากคิว
-        asyncio.run_coroutine_threadsafe(ctx.send(f'Now playing: {next_song.title}'), dx100.loop)
-    else:
-        # หยุดการเล่นเพลงถ้ายังไม่มีเพลงในคิว
-        if not ctx.voice_client.is_playing():
-            asyncio.run_coroutine_threadsafe(ctx.voice_client.disconnect(), dx100.loop)
-
 @dx100.event
 async def on_ready():
     print('Ready!')
     botactivity = discord.Activity(type=discord.ActivityType.watching, name="yoki")
     await dx100.change_presence(activity=botactivity, status=discord.Status.do_not_disturb)
     idle_check.start()
+    await clear_and_sync_commands()
+    print(f'Logged in as {dx100.user}!')
 
-@dx100.command(name='invite', help='Invite Dx100(bot) to your server', category='invite')
-async def invite(ctx):
-    invite_link = "https://discord.com/oauth2/authorize?client_id=1246434317001949254&scope=bot&permissions=631119136948049"
-    await ctx.send(f"Invite Dx100(bot) to your server: {invite_link}")
+async def clear_and_sync_commands():
+    dx100.tree.clear_commands(guild=None)  # Clear global commands
+    for guild in dx100.guilds:
+        dx100.tree.clear_commands(guild=guild)  # Clear guild-specific commands
 
-@dx100.command(name='join', help='Tells the Dx100(bot) to join the voice channel', category='join')
-async def join(ctx):
-    if not ctx.message.author.voice:
-        await ctx.send(f'{ctx.message.author.name} is not connected to a voice channel')
+    # dx100.tree.add_command(invite)
+    dx100.tree.add_command(play)
+    dx100.tree.add_command(pause)
+    dx100.tree.add_command(resume)
+    dx100.tree.add_command(stop)
+    dx100.tree.add_command(skip)
+    dx100.tree.add_command(loop)
+    dx100.tree.add_command(queue_display)
+    dx100.tree.add_command(queue_clear)
+    dx100.tree.add_command(leave)  # Add leave command
+
+    await dx100.tree.sync()
+    print("Commands cleared and synced!")
+
+# @dx100.tree.command(name='invite', description='Invite Dx100(bot) to your server')
+# async def invite(interaction: discord.Interaction):
+#     invite_link = "https://discord.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&scope=bot&permissions=631119136948049"
+#     await interaction.response.send_message(f"**Invite Dx100(bot) to your server:** {invite_link}")
+
+@dx100.tree.command(name='play', description='To play song')
+async def play(interaction: discord.Interaction, url: str):
+    voice_client = interaction.guild.voice_client
+    channel = interaction.user.voice.channel
+
+    if not interaction.user.voice:
+        await interaction.response.send_message("You are not connected to a voice channel.")
         return
-    else:
-        channel = ctx.message.author.voice.channel
-    await channel.connect()
-    reset_idle_timer()
 
-@dx100.command(name='leave', help='To make Dx100(bot) leave the voice channel', category='leave')
-async def leave(ctx):
-    voice_client = ctx.message.guild.voice_client
-    if voice_client.is_connected():
+    if voice_client and voice_client.channel != channel:
         await voice_client.disconnect()
-    else:
-        await ctx.send("Dx100(bot) is not connected to a voice channel.")
 
-async def play_song(ctx, song):
-    ctx.voice_client.play(song, after=lambda e: (check_queue(ctx) if not e else None))
-    await ctx.send(f'Now playing: {song.title}')
+    if not voice_client:
+        await channel.connect()
 
+    voice_client = interaction.guild.voice_client  # Refresh the voice client reference
 
-@dx100.command(name='play', help='To play song', category='play')
-async def play(ctx, url):
     try:
-        if "open.spotify.com" in url:
-            # เช็คว่า URL เป็นของ Spotify หรือไม่
-            track_id = url.split("/")[-1].split('?')[0]  # ดึง Spotify ID จาก URL
-            track_info = sp.track(track_id)  # รับข้อมูลเพลงจาก Spotify API
-            track_name = track_info['name']
-            artist_name = track_info['artists'][0]['name']
-            query = f"{track_name} {artist_name} audio"
-
-            # ค้นหาเพลงจาก YouTube โดยใช้ข้อมูลจาก Spotify
-            data = ytdl.extract_info(f"ytsearch:{query}", download=False)['entries'][0]
-            player = YTDLSource(discord.FFmpegPCMAudio(data['url'], **ffmpeg_options), data=data)
-        else:
-            # เป็น URL ของ YouTube
-            player = await YTDLSource.from_url(url, loop=dx100.loop, stream=True)
-
-        if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-            queue.append(player)
-            await ctx.send(f'Added to queue: {player.title}')
-        else:
-            ctx.voice_client.play(player, after=lambda e: (check_queue(ctx) if not e else None))
-            await ctx.send(f'Now playing: {player.title}')
+        player = await YTDLSource.from_url(url, loop=dx100.loop, stream=True)
     except Exception as e:
-        await ctx.send(f'An error occurred: {str(e)}')
+        await interaction.response.send_message(f"Error: {e}")
+        return
 
+    guild_id = interaction.guild.id
+    if guild_id not in queues:
+        queues[guild_id] = []
+    if guild_id not in loop_enabled:
+        loop_enabled[guild_id] = False
 
-@dx100.command(name='pause', help='This command pauses the song', category='pause')
-async def pause(ctx):
-    voice_client = ctx.message.guild.voice_client
+    if voice_client.is_playing() or voice_client.is_paused():
+        queues[guild_id].append(player)
+        await interaction.response.send_message(f'**Added to queue:** `{player.title}`')
+    else:
+        global current_song
+        current_song[guild_id] = player
+        voice_client.play(player, after=lambda e: (check_queue(interaction) if not e else None))
+        await interaction.response.send_message(f'**Now playing:** `{player.title}`')
+
+@dx100.tree.command(name='pause', description='This command pauses the song')
+async def pause(interaction: discord.Interaction):
+    voice_client = interaction.guild.voice_client
     if voice_client.is_playing():
         voice_client.pause()
+        await interaction.response.send_message("**Paused the current song.**")
     else:
-        await ctx.send("Dx100(bot) is not playing anything at the moment.")
+        await interaction.response.send_message("**Dx100(bot) is not playing anything at the moment.**")
     reset_idle_timer()
 
-@dx100.command(name='resume', help='Resumes the song', category='resume')
-async def resume(ctx):
-    voice_client = ctx.message.guild.voice_client
+@dx100.tree.command(name='resume', description='Resumes the song')
+async def resume(interaction: discord.Interaction):
+    voice_client = interaction.guild.voice_client
     if voice_client.is_paused():
         voice_client.resume()
+        await interaction.response.send_message("**Resumed the song.**")
     else:
-        await ctx.send("Dx100(bot) was not playing anything before this. Use play command")
+        await interaction.response.send_message("**Dx100(bot) was not playing anything before this. Use play command**")
     reset_idle_timer()
 
-@dx100.command(name='stop', help='Stops the song', category='stop')
-async def stop(ctx):
-    voice_client = ctx.message.guild.voice_client
+@dx100.tree.command(name='stop', description='Stops the song')
+async def stop(interaction: discord.Interaction):
+    voice_client = interaction.guild.voice_client
     if voice_client.is_playing():
         voice_client.stop()
+        await interaction.response.send_message("**Stopped the current song.**")
     else:
-        await ctx.send("Dx100(bot) is not playing anything at the moment.")
+        await interaction.response.send_message("**Dx100(bot) is not playing anything at the moment.**")
     reset_idle_timer()
 
-@dx100.command(name='skip', help='Skips the current song', category='skip')
-async def skip(ctx):
-    voice_client = ctx.message.guild.voice_client
+@dx100.tree.command(name='skip', description='Skips the current song')
+async def skip(interaction: discord.Interaction):
+    voice_client = interaction.guild.voice_client
     if voice_client.is_playing():
         voice_client.stop()
-        await ctx.send("Skipped the current song.")
+        await interaction.response.send_message("**Skipped the current song.**")
     else:
-        await ctx.send("Dx100(bot) is not playing anything at the moment.")
+        await interaction.response.send_message("**Dx100(bot) is not playing anything at the moment.**")
     reset_idle_timer()
 
-@dx100.command(name='queue', help='Displays the current queue', category='queue')
-async def queue_display(ctx):
-    if queue:
-        queue_titles = [song.title for song in queue]
-        await ctx.send(f'Current queue:\n' + "\n".join(queue_titles))
+@dx100.tree.command(name='loop', description='Toggles looping the current song')
+async def loop(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+    voice_client = interaction.guild.voice_client
+
+    if guild_id not in loop_enabled:
+        loop_enabled[guild_id] = False
+
+    if voice_client.is_playing() or voice_client.is_paused():
+        loop_enabled[guild_id] = not loop_enabled[guild_id]
+        status = "enabled" if loop_enabled[guild_id] else "disabled"
+        if loop_enabled[guild_id]:
+            await interaction.response.send_message(f"**Looping** `{current_song[guild_id].title}` **is now** `{status}`")
+        else:
+            await interaction.response.send_message(f"**Looping is now** `{status}`")
     else:
-        await ctx.send("The queue is empty.")
+        await interaction.response.send_message("**Dx100(bot) is not playing anything to loop.**")
+
+@dx100.tree.command(name='leave', description='Leaves the voice channel')
+async def leave(interaction: discord.Interaction):
+    voice_client = interaction.guild.voice_client
+    if voice_client:
+        await voice_client.disconnect()
+        await interaction.response.send_message("**Disconnected from the voice channel.**")
+    else:
+        await interaction.response.send_message("**Dx100(bot) is not connected to a voice channel.**")
+
+queues = {}
+loop_enabled = {}
+current_song = {}
+
+def check_queue(interaction):
+    guild_id = interaction.guild.id
+    voice_client = interaction.guild.voice_client
+
+    if guild_id not in queues:
+        queues[guild_id] = []
+    if guild_id not in loop_enabled:
+        loop_enabled[guild_id] = False
+
+    if loop_enabled[guild_id] and current_song.get(guild_id):
+        player = YTDLSource(discord.FFmpegPCMAudio(current_song[guild_id].url, **ffmpeg_options), data=current_song[guild_id].data)
+        voice_client.play(player, after=lambda e: (check_queue(interaction) if not e else None))
+    elif queues[guild_id]:
+        current_song[guild_id] = queues[guild_id].pop(0)
+        player = YTDLSource(discord.FFmpegPCMAudio(current_song[guild_id].url, **ffmpeg_options), data=current_song[guild_id].data)
+        voice_client.play(player, after=lambda e: (check_queue(interaction) if not e else None))
+        asyncio.run_coroutine_threadsafe(interaction.channel.send(f'**Now playing:** `{current_song[guild_id].title}`'), dx100.loop)
+    else:
+        reset_idle_timer()
+
+@dx100.tree.command(name='queue', description='Displays the current queue')
+async def queue_display(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+
+    if guild_id not in queues:
+        queues[guild_id] = []
+
+    if queues[guild_id]:
+        queue_titles = [f"`{song.title}`" for song in queues[guild_id]]
+        await interaction.response.send_message(f'**Current queue**\n' + "\n".join(queue_titles))
+    else:
+        await interaction.response.send_message("**The queue is empty.**")
     reset_idle_timer()
 
-@dx100.command(name='queueclear', help='Clears the current queue', category='queue')
-async def queue_clear(ctx):
-    global queue
-    queue.clear()
-    await ctx.send("Queue cleared.")
+@dx100.tree.command(name='queueclear', description='Clears the current queue')
+async def queue_clear(interaction: discord.Interaction):
+    guild_id = interaction.guild.id
+
+    if guild_id not in queues:
+        queues[guild_id] = []
+
+    queues[guild_id].clear()
+    await interaction.response.send_message("**Queue cleared.**")
     reset_idle_timer()
 
 @dx100.event
@@ -211,9 +261,7 @@ async def on_message(message):
     if message.author == dx100.user:
         return
     
-    if message.content.lower() == "hi":
-        await message.channel.send(f'Hello, {message.author.mention}!')
-    elif message.content.lower() == "hello":
+    if message.content.lower() in ["hi", "hello"]:
         await message.channel.send(f'Hello, {message.author.mention}!')
     
     reset_idle_timer()
@@ -221,18 +269,21 @@ async def on_message(message):
 
 # Idle timer implementation
 idle_time = 0
-MAX_IDLE_TIME = 10 * 60  # 10 minutes
+MAX_IDLE_TIME = 30  # 30 seconds
 
-@tasks.loop(seconds=60)
+@tasks.loop(seconds=10)
 async def idle_check():
     global idle_time
-    idle_time += 60
+    idle_time += 10
 
     voice_clients = dx100.voice_clients
     for vc in voice_clients:
-        if not vc.is_playing() and idle_time >= MAX_IDLE_TIME:
-            await vc.disconnect()
-            idle_time = 0
+        # Check if there are no members in the voice channel
+        if len(vc.channel.members) == 1:  # Only the bot is in the channel
+            loop_enabled[vc.guild.id] = False  # Disable looping
+            if not vc.is_playing() and not vc.is_paused() and idle_time >= MAX_IDLE_TIME:
+                await vc.disconnect()
+                idle_time = 0
 
 def reset_idle_timer():
     global idle_time
